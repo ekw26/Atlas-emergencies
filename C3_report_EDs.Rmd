@@ -1,0 +1,503 @@
+---
+title: "Emergency diagnoses - plots and tables"
+author: "Emma Whitfield"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(flextable)
+library(lubridate)
+library(glue)
+library(ggrepel)
+library(ggstance)
+source('A0_global_vars_R.R')
+
+sensitivity_analysis <- F # to run sensitivity analysis 1 set to TRUE and offset to FALSE
+offset <- F # to run sensitivity analysis 2 set to TRUE and sensitivity_analysis to FALSE
+td <- today()
+outputs_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{td}/sensitivity_analysis/offset/"), glue("{results_filepath}{td}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{td}/offset/"), glue("{results_filepath}{td}/")))
+results_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{analysis_dt}/sensitivity_analysis/offset/"), glue("{results_filepath}{analysis_dt}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{analysis_dt}/offset/"), glue("{results_filepath}{analysis_dt}/")))
+
+if (!file.exists(outputs_filepath)) {
+  dir.create(file.path(outputs_filepath))
+}
+
+if (sensitivity_analysis) {
+  ED_defn <- 'emergency hospital admission or A&E attendance'
+} else {
+  ED_defn <- 'emergency hospital admission'
+}
+```
+
+```{r display, echo=FALSE, fig.align = "center", warning = FALSE, message = FALSE, results = "asis", fig.width = 16, fig.height = 12}
+if (sensitivity_analysis) {
+  cat('# Sensitivity analysis  \n')
+} 
+
+if (offset) {
+  cat('# Offset death  \n')
+}
+
+# 1. Get results ----
+# produced in C2_run_analyses.Rmd
+if (!offset) {
+  res <- read_csv(glue('{results_filepath}/res.csv'))
+  timeres <- read_csv(glue('{results_filepath}/timeres.csv'))
+  ageres <- read_csv(glue('{results_filepath}/ageres.csv'))
+  imdres <- read_csv(glue('{results_filepath}/imdres.csv'))
+}
+prognosis <- read_csv(glue('{results_filepath}/prognosis.csv'))
+
+# 3. Display results ----
+if (!offset) {
+  cat('# Overall summary  \n')
+  cat('## Aurum')
+  t2 <- res %>%
+    filter(pln == "aurum") %>%
+    tabulator(rows = "condition", 
+              columns = "gender", 
+              `%` = as_paragraph(s)) %>%
+    as_flextable() %>%
+    bold(part = "header") %>%
+    style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+    autofit(add_w = .01) %>%
+    font(part = "all", fontname = "Calibri") %>%
+    fontsize(part = "all", size = 11)
+  cat(knitr::knit_print(t2))
+  cat("  \n  \n\\newpage\n")
+  
+  
+  cat('## GOLD')
+  t2 <- res %>%
+    filter(pln == "gold") %>%
+    tabulator(rows = "condition", 
+              columns = "gender", 
+              `%` = as_paragraph(s)) %>%
+    as_flextable() %>%
+    bold(part = "header") %>%
+    style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+    autofit(add_w = .01) %>%
+    font(part = "all", fontname = "Calibri") %>%
+    fontsize(part = "all", size = 11)
+  cat(knitr::knit_print(t2))
+  cat("  \n  \n\\newpage\n")
+  
+  # slope plot of frequency
+  if (!sensitivity_analysis) {
+    p <- res %>%
+    mutate(x = case_match(gender, 
+                          "Men" ~ 2, 
+                          "Women" ~ 1), 
+           signif = ED.p < 0.05, 
+           plncap = case_match(pln, 
+                               'gold' ~ 'GOLD', 
+                               'aurum' ~ 'Aurum'), 
+           nudge_y = case_when(pln == "aurum" & gender == "Women" & condition == "Brain tumours" ~ 58.6,
+                               pln == "aurum" & gender == "Women" & condition == "Rheumatoid arthritis" ~ 30.5,
+                               pln == "aurum" & gender == "Women" & condition == "Parkinson's disease" ~ 34.4,
+                               pln == "aurum" & gender == "Women" & condition == "Colon cancer" ~ 36.4,
+                               pln == "aurum" & gender == "Men" & condition == "Parkinson's disease" ~ 31.05,
+                               pln == "aurum" & gender == "Men" & condition == "Colon cancer" ~ 33.05,
+                               pln == "aurum" & gender == "Women" & condition == "COPD" ~ 38.8,
+                               pln == "aurum" & gender == "Women" & condition == "Ovarian cancer" ~ 40.8,
+                               pln == "aurum" & gender == "Women" & condition == "Schizophrenia" ~ 43,
+                               pln == "aurum" & gender == "Women" & condition == "Lung cancer" ~ 45,
+                               pln == "aurum" & gender == "Women" & condition == "Coeliac disease" ~ 10,
+                               pln == "aurum" & gender == "Men" & condition == "Coeliac disease" ~ 9.6,
+                               pln == "aurum" & gender == "Men" & condition == "Lyme disease" ~ 7.6,
+                               pln == "aurum" & gender == "Men" & condition == "Tuberculosis" ~ 37.5,
+                               pln == "aurum" & gender == "Men" & condition == "IBD" ~ 24.15,
+                               pln == "aurum" & gender == "Men" & condition == "Multiple sclerosis" ~ 22.15,
+                               pln == "gold" & gender == "Women" & condition == "Schizophrenia" ~ 43.05,
+                               pln == "gold" & gender == "Women" & condition == "Lung cancer" ~ 45.05,
+                               pln == "gold" & gender == "Women" & condition == "COPD" ~ 41.6,
+                               pln == "gold" & gender == "Women" & condition == "Ovarian cancer" ~ 39.6,
+                               pln == "gold" & gender == "Women" & condition == "Tuberculosis" ~ 29.5,
+                               pln == "gold" & gender == "Women" & condition == "Rheumatoid arthritis" ~ 27.5,
+                               pln == "gold" & gender == "Women" & condition == "Coeliac disease" ~ 9.82,
+                               pln == "gold" & gender == "Women" & condition == "Lyme disease" ~ 5.82,
+                               pln == "gold" & gender == "Men" & condition == "Coeliac disease" ~ 8.82,
+                               pln == "gold" & gender == "Men" & condition == "Lyme disease" ~ 6.87,
+                               pln == "gold" & gender == "Men" & condition == "IBD" ~ 22,
+                               pln == "gold" & gender == "Men" & condition == "Multiple sclerosis" ~ 24,
+                               pln == "gold" & gender == "Men" & condition == "Rheumatoid arthritis" ~ 26,
+                               T ~ prop)) %>%
+    ggplot(aes(x, prop, group = condition, col = signif)) +
+    facet_wrap(plncap ~ .) +
+    geom_segment(x = 1, xend = 1, y = 0, yend = 100, col = "grey70", linewidth = 0.5) +
+    geom_segment(x = 2, xend = 2, y = 0, yend = 100, col = "grey70", linewidth = 0.5) +
+    geom_point() + 
+    geom_line() + 
+    geom_text(x = 1, y = 105, label = "Women", col = "black", size = 4) +  
+    geom_text(x = 2, y = 105, label = "Men", col = "black", size = 4) +
+    geom_text(data = . %>% filter(gender == "Women"), aes(x = 0.95, y = nudge_y, label = glue("{condition}, {signif(prop, 3)}%")), col = "grey30", hjust = "right", size = 3.5) + 
+    geom_text(data = . %>% filter(gender == "Men"), aes(x = 2.05, y = nudge_y, label = glue("{signif(prop, 3)}%")), col = "grey30", hjust = "left", size = 3.5) +
+    ylim(c(0, 105)) + 
+    xlim(c(-0.3, 2.5)) +
+    theme_classic() + 
+    theme(axis.line = element_blank(), axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), strip.background = element_blank(), 
+          text = element_text(size = 14)) + 
+    labs(title = glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn})"),
+         col = "Statistically significant gender difference")
+    
+    ggsave(glue("{outputs_filepath}ED_freq.jpg"), p, width = 18, height = 10, create.dir = T)
+    print(p)
+    cat("  \n  \n\\newpage\n")
+  }
+  
+  # function to plot time, age, and IMD trends in frequency 
+  plot_trends <- function(df, trend_var, pln1, gender1) {
+    df <- df %>%
+      filter(pln == pln1, gender == gender1)
+    
+    atlas_palette <- c(`Axial spondyloarthritis` = "blue3", `Brain tumours` = "#E31A1C", `Coeliac disease` = "green4", `CHD` = "#6A3D9A", `Colon cancer` = "#FF7F00", `COPD` = "orchid1", `IBD` = "black", `Lung cancer` = "gold2", `Lyme disease` = "skyblue1", `Multiple sclerosis` = "blue3", `Ovarian cancer`= "#E31A1C", `Pancreatic cancer` = "green4", `Parkinson's disease` = "#6A3D9A", `PCOS` = "#FF7F00", `Rheumatoid arthritis` = "orchid1", `SBE` = "black", `Schizophrenia` = "gold2", `Tuberculosis` = "skyblue1")
+    
+    if (trend_var == "diagyear") {
+      df <- df %>%
+        mutate(label = if_else(diagyear == 2019, as.character(condition), NA_character_))
+      title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by year of diagnosis")
+      x.label <- "Year of diagnosis"
+      
+      nudge_x <- 3
+      x.limits <- c(1999, 2025)
+      x.breaks <- seq(2000, 2015, 5)
+      x.labels <- seq(2000, 2015, 5)
+    } else if (trend_var == "age_mid") {
+      df <- df %>%
+        group_by(condition) %>%
+        mutate(label = if_else(age_mid == max(age_mid), as.character(condition), NA_character_)) %>%
+        ungroup() 
+      
+      title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by age group at diagnosis")
+      x.label <- "Age at diagnosis"
+      
+      nudge_x <- 15
+      x.limits <- c(0, 125)
+      x.breaks <- c(8, 18, 23, 28, 33, 38, 43, 48, 53, 58, 63, 68, 73, 78, 85, 95)
+      x.labels <- c("< 16", "16-20", "21-25", "26-30", "31-35", "36-40", "41-45", "46-50", "51-55", "56-60", "61-65", "66-70", "71-75", "76-80", "81-90", "> 90")
+    } else { # deprivation
+      df <- df %>%
+        mutate(label = if_else(imd == 20, as.character(condition), NA_character_))
+      title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by IMD twentile")
+      x.label <- "IMD twentile"
+      
+      nudge_x <- 3
+      x.limits <- c(1, 26)
+      x.breaks <- seq(1, 20)
+      x.labels <- seq(1, 20)
+    }
+    
+    if (gender1 == "Men") {
+      subtitle <- glue('{ifelse(pln1 == "aurum", "Aurum", "GOLD")}: Men')
+    } else {
+      subtitle <- glue('{ifelse(pln1 == "aurum", "Aurum", "GOLD")}: Women')
+    }
+    
+    p <- df %>%
+      ggplot(aes(.data[[trend_var]], prop, group = condition, col = condition)) + 
+      facet_wrap(grp ~ .) +
+      geom_smooth(se = F) + geom_point() +
+      geom_errorbar(aes(ymin = low.ci, ymax = up.ci), width = 0.2) +
+      geom_label_repel(aes(label = label), nudge_x = nudge_x, na.rm = T, direction = "y", segment.linetype = 2, size = 4) +
+      scale_y_continuous(limits = c(0, 100), expand = c(0,0)) +
+      scale_x_continuous(limits = x.limits, breaks = x.breaks, labels = x.labels) +
+      theme_bw() + scale_colour_manual(values = atlas_palette, guide = 'none') +
+      theme(strip.background = element_blank(),
+          strip.text.x = element_blank(),
+          text = element_text(size = 16),
+          axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5)) +
+      labs(title = str_wrap(title, 150),
+         subtitle = subtitle,
+         x = x.label,
+         y = "Percentage of cases")
+    
+    return(p)
+  }
+  
+  cat('# Change over time  \n')
+  timeres <- timeres %>%
+    filter(n.pats >= 10)
+  
+  p <- plot_trends(timeres, 'diagyear', 'aurum', 'Men')
+  ggsave(glue("{outputs_filepath}diagyear_aurum_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(timeres, 'diagyear', 'aurum', 'Women')
+  ggsave(glue("{outputs_filepath}diagyear_aurum_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(timeres, 'diagyear', 'gold', 'Men')
+  ggsave(glue("{outputs_filepath}diagyear_gold_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(timeres, 'diagyear', 'gold', 'Women')
+  ggsave(glue("{outputs_filepath}diagyear_gold_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  cat('# Change over age  \n')
+  ageres <- ageres %>%
+    filter(n.pats >= 10)
+  
+  p <- plot_trends(ageres, 'age_mid', 'aurum', 'Men')
+  ggsave(glue("{outputs_filepath}age_mid_aurum_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(ageres, 'age_mid', 'aurum', 'Women')
+  ggsave(glue("{outputs_filepath}age_mid_aurum_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(ageres, 'age_mid', 'gold', 'Men')
+  ggsave(glue("{outputs_filepath}age_mid_gold_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(ageres, 'age_mid', 'gold', 'Women')
+  ggsave(glue("{outputs_filepath}age_mid_gold_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  cat('# Change over IMD  \n')
+  
+  imdres <- imdres %>%
+    filter(n.pats >= 10)
+  
+  p <- plot_trends(imdres, 'imd', 'aurum', 'Men')
+  ggsave(glue("{outputs_filepath}imd_aurum_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(imdres, 'imd', 'aurum', 'Women')
+  ggsave(glue("{outputs_filepath}imd_aurum_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(imdres, 'imd', 'gold', 'Men')
+  ggsave(glue("{outputs_filepath}imd_gold_men.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+  
+  p <- plot_trends(imdres, 'imd', 'gold', 'Women')
+  ggsave(glue("{outputs_filepath}imd_gold_women.jpg"), p, width = 18, height = 10)
+  print(p)
+  cat("  \n  \n\\newpage\n")
+}
+
+cat('# Prognosis - death')
+cat('\n')
+plot_deathORs <- function() {
+  df <- prognosis %>%
+    filter(n.EDdeath >= 10, n.NEDdeath >= 10) %>% 
+    select(gender, pln, condition, death.crude, death.lowcrude, death.upcrude) %>%
+    mutate(OR_type = 'Crude') %>%
+    rename(death = death.crude, 
+           death.low = death.lowcrude, 
+           death.up = death.upcrude) %>%
+    rbind(prognosis %>%
+            filter(n.EDdeath >= 10, n.NEDdeath >= 10) %>% 
+            select(gender, pln, condition, death, death.low, death.up) %>%
+            mutate(OR_type = 'Adjusted')) %>%
+    mutate(condition = as.factor(condition), 
+           pln = case_when(pln == 'aurum' ~ 'Aurum', 
+                           T ~ 'GOLD')) 
+  
+  # want most fatal condition at top so reorder
+  levs <- df %>% filter(pln == "Aurum", gender == "Women", OR_type == "Adjusted") %>% arrange(death) %>% pull(condition)
+  df$condition <- factor(df$condition, levels = levs)
+  
+  # forest plot
+  p <- df %>%
+    ggplot(aes(y = condition, colour = OR_type, group = interaction(OR_type, pln))) + 
+    facet_wrap(gender ~ .) +
+    ggplot2::geom_errorbarh(aes(xmin = death.low, xmax = death.up), height = .5, size = .8, position = position_dodgev(height = 0.8)) + 
+    geom_point(aes(x = death, shape = pln), size = 3, position = position_dodgev(height = 0.8)) + 
+    geom_vline(xintercept = 1, linetype = "dashed") + 
+    coord_trans(x = "log10") + 
+    scale_x_continuous(breaks = c(1, 2.5, 5, 10, 20, 30)) + 
+    theme_bw() + 
+    theme(text = element_text(size = 18)) +
+    labs(title = "Odds ratios for 1-year mortality in emergency diagnosed vs non-emergency diagnosed patients", 
+         colour = "", 
+         shape = "",
+         y = "",
+         x = "")
+  
+  return(p)
+}
+
+prognosis_tab <- prognosis %>%
+  mutate(mort_ED = glue("{signif(death.obs_true, 3)}% ({n.EDdeath})"),
+         mort_NED = glue("{signif(death.obs_false, 3)}% ({n.NEDdeath})"),
+         death.crude = glue("{signif(death.crude, 3)} ({signif(death.lowcrude, 3)}, {signif(death.upcrude, 3)})"),
+         death = glue("{signif(death, 3)} ({signif(death.low, 3)}, {signif(death.up, 3)})"), 
+         death.p = glue("{signif(death.p, 3)}"),
+         hosp_ED = glue("{signif(perc.EDadmitted, 3)}% ({n.EDadmitted})"), 
+         hosp_NED = glue("{signif(perc.NEDadmitted, 3)}% ({n.NEDadmitted})"),
+         time.crude = glue("{signif(time.crude, 3)} ({signif(time.lowcrude, 3)}, {signif(time.upcrude, 3)})"),
+         time = glue("{signif(time, 3)} ({signif(time.low, 3)}, {signif(time.up, 3)})"),
+         hosp.p = glue("{signif(hosp.p, 3)}"))
+
+t3a <- prognosis_tab %>%
+  filter(pln == "aurum") %>%
+  tabulator(rows = "condition",
+            columns = "gender",
+            `ED - N patients` = as_paragraph(n.ED),
+            `1-year mortality, % (n)` = as_paragraph(mort_ED),
+            `Non-ED - N patients` = as_paragraph(n.NED),
+            `1-year mortality, non-ED, %(n)` = as_paragraph(mort_NED),
+            `Crude OR (95% CI)` = as_paragraph(death.crude),
+            `Adjusted OR (95% CI)` = as_paragraph(death), 
+            `p-value` = as_paragraph(death.p)
+            ) %>%
+  as_flextable() %>%
+  bold(part = "header") %>%
+  style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+  autofit(add_w = .01) %>%
+  font(part = "all", fontname = "Calibri") %>%
+  fontsize(part = "all", size = 11)
+
+t3b <- prognosis_tab %>%
+  filter(pln == "gold") %>%
+  tabulator(rows = "condition",
+            columns = "gender",
+            `ED - N patients` = as_paragraph(n.ED),
+            `1-year mortality, % (n)` = as_paragraph(mort_ED),
+            `Non-ED - N patients` = as_paragraph(n.NED),
+            `1-year mortality, non-ED, %(n)` = as_paragraph(mort_NED),
+            `Crude OR (95% CI)` = as_paragraph(death.crude),
+            `Adjusted OR (95% CI)` = as_paragraph(death), 
+            `p-value` = as_paragraph(death.p)
+            ) %>%
+  as_flextable() %>%
+  bold(part = "header") %>%
+  style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+  autofit(add_w = .01) %>%
+  font(part = "all", fontname = "Calibri") %>%
+  fontsize(part = "all", size = 11)
+
+
+p <- plot_deathORs()
+ggsave(glue("{outputs_filepath}death_ORs.jpg"), p, width = 18, height = 10)
+print(p)
+cat("  \n  \n\\newpage\n")
+cat('Aurum - prognosis')
+cat(knitr::knit_print(t3a))
+cat('GOLD - prognosis')
+cat(knitr::knit_print(t3b))
+
+cat('# Prognosis - hospitalisation')
+cat('\n')
+
+plot_timeORs <- function() {
+  df <- prognosis %>%
+    filter(n.EDadmitted >= 10, n.NEDadmitted >= 10) %>% 
+    select(gender, pln, condition, time.crude, time.lowcrude, time.upcrude) %>%
+    mutate(OR_type = 'Crude') %>%
+    rename(time = time.crude, 
+           time.low = time.lowcrude, 
+           time.up = time.upcrude) %>%
+    rbind(prognosis %>%
+            filter(n.EDadmitted >= 10, n.NEDadmitted >= 10) %>% 
+            select(gender, pln, condition, time, time.low, time.up) %>%
+            mutate(OR_type = 'Adjusted')) %>%
+    mutate(condition = as.factor(condition), 
+           pln = case_when(pln == 'aurum' ~ 'Aurum', 
+                           T ~ 'GOLD'))
+  
+  # cut off CIs at 50
+  df <- df %>%
+    mutate(time.up = case_when(time.up > 50 ~ 50, 
+                               T ~ time.up))
+  
+  # want most impactful condition at top so reorder
+  levs <- df %>% 
+    filter(pln == "Aurum", gender == "Women", OR_type == "Adjusted") %>% 
+    arrange(time) %>% 
+    pull(condition)
+  df$condition <- factor(df$condition, levels = levs)
+  
+  #forest plot
+  p <- df %>%
+    ggplot(aes(colour = OR_type, y = condition, group = interaction(OR_type, pln))) + 
+    facet_wrap(gender ~ .) +
+    ggplot2::geom_errorbarh(aes(xmin = time.low, xmax = time.up), height = .5, size = .8, position = position_dodgev(height = 0.8)) + 
+    geom_point(aes(x = time, shape = pln), size = 3, position = position_dodgev(height = 0.8)) + 
+    geom_vline(xintercept = 1, linetype = "dashed") + 
+    coord_trans(x = "log10") + 
+    scale_x_continuous(breaks = c(1, 2.5, 5, 10, 25, 50)) +
+    theme_bw() + 
+    theme(text = element_text(size = 18)) +
+    labs(title = str_wrap("Rate ratios for time in hospital in year after diagnosis in emergency diagnosed vs non-emergency diagnosed patients", 150), 
+         shape = "",
+         colour = "", 
+         y = "",
+         x = "")
+  
+  return(p)
+}
+
+t3a <- prognosis_tab %>%
+  filter(pln == 'aurum') %>%
+  tabulator(rows = "condition",
+            columns = "gender", 
+            `ED - N patients` = as_paragraph(n.ED),
+            `ED admitted, % (n)` = as_paragraph(hosp_ED),
+            `Observed mean admission days - ED` = as_paragraph(time.obs_true),
+            `Non-ED - N patients` = as_paragraph(n.NED),
+            `Non-ED admitted, %(n)` = as_paragraph(hosp_NED),
+            `Observed mean admission days - non-ED` = as_paragraph(time.obs_false),
+            `Crude RR (95% CI)` = as_paragraph(time.crude),
+            `Adjusted RR (95% CI)` = as_paragraph(time), 
+            `p-value` = as_paragraph(hosp.p)
+            ) %>%
+  as_flextable() %>%
+  bold(part = "header") %>%
+  style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+  autofit(add_w = .01) %>%
+  font(part = "all", fontname = "Calibri") %>%
+  fontsize(part = "all", size = 11)
+
+t3b <- prognosis_tab %>%
+  filter(pln == 'gold') %>%
+  tabulator(rows = "condition",
+            columns = "gender", 
+            `ED - N patients` = as_paragraph(n.ED),
+            `ED admitted, % (n)` = as_paragraph(hosp_ED),
+            `Observed mean admission days - ED` = as_paragraph(time.obs_true),
+            `Non-ED - N patients` = as_paragraph(n.NED),
+            `Non-ED admitted, %(n)` = as_paragraph(hosp_NED),
+            `Observed mean admission days - non-ED` = as_paragraph(time.obs_false),
+            `Crude RR (95% CI)` = as_paragraph(time.crude),
+            `Adjusted RR (95% CI)` = as_paragraph(time), 
+            `p-value` = as_paragraph(hosp.p)
+            ) %>%
+  as_flextable() %>%
+  bold(part = "header") %>%
+  style(pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+  autofit(add_w = .01) %>%
+  font(part = "all", fontname = "Calibri") %>%
+  fontsize(part = "all", size = 11)
+
+p <- plot_timeORs()
+ggsave(glue("{outputs_filepath}time_ORs.jpg"), p, width = 18, height = 10)
+print(p)
+cat("  \n  \n\\newpage\n")
+cat('Aurum - prognosis')
+cat(knitr::knit_print(t3a))
+cat('GOLD - prognosis')
+cat(knitr::knit_print(t3b))
+
+```
+
+```{r session_info, echo=FALSE, message = FALSE, results = "asis"}
+cat('# Session information  \n')
+print(sessionInfo())
+```

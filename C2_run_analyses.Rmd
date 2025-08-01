@@ -1,0 +1,643 @@
+---
+title: "Emergency diagnoses - basic frequency and analyses"
+author: "Emma Whitfield"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(flextable)
+library(lubridate)
+library(RMySQL)
+library(glue)
+library(lmtest)
+library(glmmTMB)
+source('A0_global_vars_R.R')
+
+sensitivity_analysis <- F # to run sensitivity analysis 1 set to TRUE and offset to FALSE
+offset <- F # to run sensitivity analysis 2 set to TRUE and sensitivity_analysis to FALSE
+td <- today()
+results_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{td}/sensitivity_analysis/offset/"), glue("{results_filepath}{td}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{td}/offset/"), glue("{results_filepath}{td}/")))
+
+if (!file.exists(results_filepath)) {
+  dir.create(file.path(results_filepath))
+}
+
+if (sensitivity_analysis) {
+  ED_defn <- 'emergency hospital admission or A&E attendance'
+} else {
+  ED_defn <- 'emergency hospital admission'
+}
+```
+
+```{r display, echo=FALSE, fig.align = "center", warning = FALSE, message = FALSE, results = "asis", fig.width = 16, fig.height = 12}
+if (sensitivity_analysis) {
+  cat('# Sensitivity analysis\n')
+} 
+
+if (offset) {
+  cat('# Offset death\n')
+}
+
+# 1. Useful functions ----
+extract_EDs <- function(pln, condition) {
+  db <- dbConnect(
+    MySQL(), 
+    host = host, 
+    user = user, 
+    password = password,
+    dbname = dbname, 
+    port = port
+  )
+  # extract patients and followup
+  pat_query <- dbSendQuery(conn = db, 
+                           statement = glue('select * from {sql_schema}.{pln}_{condition}_patients;'))
+  patients <- fetch(pat_query, n = -1)
+  dbClearResult(pat_query)
+  
+  fup_query <- dbSendQuery(conn = db, 
+                           statement = glue('select * from {sql_schema}.{pln}_{condition}_admissions;'))
+  admit <- fetch(fup_query, n = -1)
+  dbClearResult(fup_query)
+  
+  if (sensitivity_analysis) {
+    # also get attendances
+    fup_query <- dbSendQuery(conn = db, 
+                           statement = glue('select * from {sql_schema}.{pln}_{condition}_attends;'))
+    attend <- fetch(fup_query, n = -1)
+    dbClearResult
+  }
+  
+  launders_query <- dbSendQuery(conn = db,
+                                statement = glue('select * from {sql_schema}.{pln}_{condition}_launders;'))
+  launders <- fetch(launders_query, n = -1)
+  dbClearResult(launders_query)
+  
+  death_query <- dbSendQuery(conn = db,
+                                statement = glue('select * from {sql_schema}.{pln}_{condition}_death;'))
+  death <- fetch(death_query, n = -1)
+  dbClearResult(death_query)
+  
+  dbDisconnect(db)
+  rm(list = c("pat_query", "fup_query", "launders_query", "death_query"))
+  
+  patients <- patients %>%
+    mutate(diagdate = ymd(diagdate), 
+           startdate = ymd(startdate), 
+           enddate = ymd(enddate), 
+           deathdate = ymd(deathdate)) %>%
+    mutate(imd = as.numeric(imd))
+  
+  # make sure there are no extra patients
+  cases <- unique(patients$patid)
+  admit <- admit %>%
+    filter(patid %in% cases)
+  launders <- launders %>%
+    filter(patid %in% cases)
+  death <- death %>%
+    filter(patid %in% cases)
+  
+  launders <- launders %>%
+    mutate(recorddate = ymd(recorddate))
+  
+  admit <- admit %>%
+    mutate(admidate = ymd(admidate)) %>%
+    select(-description)
+  
+  # add time to diagnosis 
+  admit_ttd <- admit %>%
+    distinct(patid, admidate, .keep_all = T) %>%
+    left_join(patients %>% select(patid, diagdate, yob) %>% distinct(), by = join_by(patid)) %>%
+    mutate(ttd = as.numeric(difftime(diagdate, admidate, units = "days")))
+  
+  # get emergency event closest to diagnosis for each patient
+  latest_admit <- admit_ttd %>%
+    group_by(patid) %>%
+    summarise(earliest_ttd = min(ttd)) %>%
+    filter(earliest_ttd <= 30)
+  
+  # identify ED patients
+  if (sensitivity_analysis) {
+    attend <- attend %>%
+      filter(patid %in% cases)
+    
+    attend <- attend %>%
+      mutate(arrivaldate = ymd(arrivaldate)) %>%
+      select(-aepatgroup)
+    
+    attend_ttd <- attend %>%
+      distinct(patid, arrivaldate, .keep_all = T) %>%
+      left_join(patients %>% select(patid, diagdate, yob) %>% distinct(), by = join_by(patid)) %>%
+      mutate(ttd = as.numeric(difftime(diagdate, arrivaldate, units = "days")))
+    
+    latest_attend <- attend_ttd %>%
+      group_by(patid) %>%
+      summarise(earliest_ttd = min(ttd)) %>%
+      filter(earliest_ttd <= 30)
+    
+    patients_admit <- patients %>%
+      mutate(ED = patid %in% c(latest_admit$patid, latest_attend$patid))
+  } else {
+    patients_admit <- patients %>%
+      mutate(ED = patid %in% latest_admit$patid)
+  }
+  
+  # get launders score at six months before diagnosis date
+  launders <- launders %>%
+    filter(ttd >= 180) %>%
+    group_by(patid) %>%
+    summarise(launders_score = n_distinct(comorbidity)) %>% 
+    select(patid, launders_score)
+  
+  patients_admit <- patients_admit %>%
+    left_join(launders, by = join_by(patid)) %>%
+    mutate(launders_score = replace_na(launders_score, 0))
+  
+  patients_admit <- patients_admit %>%
+    mutate(diagyear = year(diagdate), 
+           gender = case_when(gender == 1 ~ 'Men',
+                              gender == 2 ~ 'Women',
+                              gender == 3 ~ 'Indeterminate',
+                              gender == 4 ~ 'Unknown',
+                              gender == 0 ~ 'Data not entered',
+                              T ~ as.character(gender)), 
+           diagage = diagyear - yob, 
+           datasource = case_when(str_detect(datasource, 'ons') ~ 'ons', 
+                                  T ~ datasource)) %>%
+    select(patid, ED, diagyear, datasource, diagage, gender, launders_score, imd, diagdate, deathdate)
+  
+  # append prognosis
+  patients_admit <- patients_admit %>% 
+    left_join(death, by = join_by(patid))
+  
+  return(patients_admit)
+}
+
+append_hospitalisations <- function(patients_admit, pln, condition) {
+  db <- dbConnect(
+    MySQL(), 
+    host = host, 
+    user = user, 
+    password = password,
+    dbname = dbname, 
+    port = port
+  )
+  
+  hosp_query <- dbSendQuery(conn = db, 
+                            statement = glue('select * from {sql_schema}.{pln}_{condition}_hosp;'))
+  
+  hosp_records <- fetch(hosp_query, n = -1)
+  dbClearResult(hosp_query)
+  
+  dbDisconnect(db)
+  rm(hosp_query)
+  
+  # make sure no extra patients
+  cases <- unique(patients_admit$patid)
+  hosp_records <- hosp_records %>%
+    filter(patid %in% cases)
+  
+  # prepare hospital counts
+  # make sure not counting any night twice
+  hosp_records <- hosp_records %>%
+    mutate(diagdate = ymd(diagdate), 
+           admidate = ymd(admidate), 
+           discharged = ymd(discharged)) %>%
+    group_by(patid) %>%
+    arrange(desc(admidate)) %>%
+    mutate(next_admission = lag(admidate)) %>%
+    ungroup() %>%
+    mutate(admidate = if_else(admidate <= diagdate, diagdate + days(1), admidate), 
+           discharged = if_else(!is.na(next_admission) & (discharged > next_admission), next_admission, discharged), 
+           discharged = if_else(discharged > diagdate + days(365), diagdate + days(365), discharged)) 
+  
+  # remove stays that start and end on same day - counting number of nights stayed
+  hosp_records <- hosp_records %>%
+    filter(admidate < discharged) %>%
+    mutate(tih = as.integer(difftime(discharged, admidate, units = "days")))
+  
+  hosp_summary <- hosp_records %>%
+    group_by(patid) %>%
+    summarise(total_tih = sum(tih), 
+              n_admissions = n())
+  
+  # now add to patients_admit
+  patients_admit <- patients_admit %>%
+    left_join(hosp_summary, by = join_by(patid)) %>%
+    mutate(total_tih = replace_na(total_tih, 0), 
+            n_admissions = replace_na(n_admissions, 0))
+  
+  return(patients_admit)
+}
+
+assess_prognosis <- function(patients_admit, pln, condition) {
+  # restrict to patients who didn't die on diagnosis date
+  no_death <- patients_admit %>%
+    filter((diagdate != deathdate) | is.na(deathdate),
+           !is.na(imd)) %>%
+    mutate(datasource = as.factor(datasource), 
+           diagyear = diagyear - 1999) 
+  
+  no_death <- no_death %>% 
+    mutate(death.bin = (!is.na(death)) & (death > 0) & (death <= 365), 
+           death_offset = ifelse(death.bin, death, 365))
+  
+  obs <- no_death %>%
+    group_by(ED) %>%
+    summarise(n.pats = n(), 
+              n.death = sum(death.bin), 
+              n.admitted = sum(n_admissions > 0),
+              mean.admit = mean(n_admissions), 
+              mean.time = mean(total_tih)) %>%
+    mutate(prop.death = 100*n.death/n.pats,
+           prop.admitted = 100*n.admitted/n.pats)
+    
+  # fit death models
+  m1 <- glm(death.bin ~ ED + diagage + diagyear + imd + launders_score + datasource, 
+            data = no_death, 
+            family = binomial(link = "logit"))
+  
+  death.int <- exp(confint(m1, "EDTRUE"))
+
+  m2 <- glm(death.bin ~ ED,
+            data = no_death,
+            family = binomial(link = "logit"))
+  
+  death.crude.int <- exp(confint(m2, "EDTRUE"))
+  
+  # fit hospitalisation models
+  if (offset) {
+    m3 <- glmmTMB(total_tih ~ ED + diagage + diagyear + imd + launders_score + datasource + offset(log(death_offset)), 
+                data = no_death, 
+                family = nbinom2)
+  
+    m4 <- glmmTMB(total_tih ~ ED + offset(log(death_offset)), 
+                  data = no_death, 
+                  family = nbinom2)
+  } else {
+    m3 <- glmmTMB(total_tih ~ ED + diagage + diagyear + imd + launders_score + datasource, 
+                  data = no_death, 
+                  family = nbinom2)
+  
+    m4 <- glmmTMB(total_tih ~ ED, 
+                  data = no_death, 
+                  family = nbinom2)
+  } 
+ 
+  time.int <- exp(confint(m3, "EDTRUE"))
+  
+  time.crude.int <- exp(confint(m4, "EDTRUE"))
+
+  return(tibble(n.ED = obs$n.pats[obs$ED], n.EDdeath = obs$n.death[obs$ED], death.obs_true = obs$prop.death[obs$ED], n.NED = obs$n.pats[!obs$ED], n.NEDdeath = obs$n.death[!obs$ED], death.obs_false = obs$prop.death[!obs$ED], death.crude = exp(coef(m2)[2]), death.lowcrude = death.crude.int[1], death.upcrude = death.crude.int[2], death = exp(coef(m1)[2]), death.low = death.int[1], death.up = death.int[2], n.EDadmitted = obs$n.admitted[obs$ED], perc.EDadmitted = obs$prop.admitted[obs$ED], time.obs_true = obs$mean.time[obs$ED], n.NEDadmitted = obs$n.admitted[!obs$ED], perc.NEDadmitted = obs$prop.admitted[!obs$ED], time.obs_false = obs$mean.time[!obs$ED], time.crude = time.crude.int[3], time.lowcrude = time.crude.int[1], time.upcrude = time.crude.int[2], time = time.int[3], time.low = time.int[1], time.up = time.int[2]))
+}
+
+assess_gender_prognosis <- function(patients_admit) {
+  # compare gender association with death
+  # restrict to patients who didn't die on diagnosis date
+  no_death <- patients_admit %>%
+    filter((diagdate != deathdate) | is.na(deathdate),
+           !is.na(imd)) %>%
+    mutate(datasource = as.factor(datasource), 
+           diagyear = diagyear - 1999) 
+  
+  if (sum(!is.na(no_death$death) & (no_death$death < 0))) {
+    errorCondition('Patient has deathdate before emergency diagnosis')
+  }
+  
+  no_death <- no_death %>% 
+    mutate(death.bin = (!is.na(death)) & (death > 0) & (death <= 365), 
+           death_offset = ifelse(death.bin, death, 365)) 
+  
+  
+  m1 <- glm(death.bin ~ ED + gender*(diagage + diagyear + imd + launders_score + datasource), 
+            data = no_death, 
+            family = binomial(link = "logit"))
+  
+  m2 <- glm(death.bin ~ gender*(ED + diagage + diagyear + imd + launders_score + datasource), 
+            data = no_death, 
+            family = binomial(link = "logit"))
+  
+  death.test <- lrtest(m1, m2)
+  
+  
+  if (offset) {
+    m3 <- glmmTMB(total_tih ~ ED + gender*(diagage + diagyear + imd + launders_score + datasource) + offset(log(death_offset)), 
+                data = no_death, 
+                family = nbinom2)
+  
+    m4 <- glmmTMB(total_tih ~ gender*(ED + diagage + diagyear + imd + launders_score + datasource) + offset(log(death_offset)), 
+                  data = no_death, 
+                  family = nbinom2)
+  } else {
+    m3 <- glmmTMB(total_tih ~ ED + gender*(diagage + diagyear + imd + launders_score + datasource), 
+                data = no_death, 
+                family = nbinom2)
+  
+    m4 <- glmmTMB(total_tih ~ gender*(ED + diagage + diagyear + imd + launders_score + datasource), 
+                  data = no_death, 
+                  family = nbinom2)
+  }
+  hosp.test <- lrtest(m3, m4)
+  
+  return(tibble(death.p = death.test$`Pr(>Chisq)`[2], hosp.p = hosp.test$`Pr(>Chisq)`[2]))
+  
+}
+
+# 2. Loop to process data ----
+res <- tibble(gender = c(), pln = c(), condition = c(), ED = c(), n.pats = c(), ED.p = c())
+timeres <- tibble(gender = c(), pln = c(), condition = c(), diagyear = c(), prop = c(), low.ci = c(), up.ci = c())
+ageres <- tibble(gender = c(), pln = c(), condition = c(), diagage = c(), prop = c(), low.ci = c(), up.ci = c())
+imdres <- tibble(gender = c(), pln = c(), condition = c(), imd = c(), prop = c(), low.ci = c(), up.ci = c())
+prognosis <- tibble(gender = c(), pln = c(), condition = c(), time = c(), n.ED = c(), n.EDdeath = c(), death.obs_true = c(), n.NED = c(), n.NEDdeath = c(), death.obs_false = c(), death.crude = c(), death.lowcrude = c(), death.upcrude = c(), death = c(), death.low = c(), death.up = c(), n.EDadmitted = c(), perc.EDadmitted = c(), time.obs_true = c(), n.NEDadmitted = c(), perc.NEDadmitted = c(), time.obs_false = c(), time.crude = c(), time.lowcrude = c(), time.upcrude = c(), time = c(), time.low = c(), time.up = c())
+gender_diffs <- tibble(pln = c(), condition = c(), death.p = c(), hosp.p = c())
+
+tidy_res <- function(patients_admit, group_var, cond1, pln1) {
+  patients_admit %>%
+    group_by({{group_var}}, gender) %>%
+    summarise(prop = 100*mean(ED, na.rm = T), 
+              low.ci = 100*prop.test(sum(ED), n())$conf.int[1], 
+              up.ci = 100*prop.test(sum(ED), n())$conf.int[2], 
+              n.ED = sum(ED), 
+              n.pats = n()) %>%
+    mutate(condition = cond1,
+           pln = pln1)
+    
+}
+
+for (cond in conditions) {
+    cat("# ", cond, "\n")
+  for (plnx in c('gold', 'aurum')) {
+    cat("## ", plnx, "\n")
+    patients_admit <- extract_EDs(plnx, cond)
+    patients_admit <- append_hospitalisations(patients_admit, plnx, cond)
+    
+    # ED frequency and trends
+    if (!(cond %in% c('ovarian_cancer', 'PCOS'))) {
+      patients_admit <- patients_admit %>%
+        filter(gender %in% c('Men', 'Women'))
+      
+      # compare ED frequency
+      EDcross <- table(patients_admit$ED, patients_admit$gender)
+      EDp <- chisq.test(EDcross)
+      
+      if (any(EDp$expected < 5)) {
+      cat("Warning - ", cond, "EP chi-sq has values less than 5")
+      knitr::kable(EDp$expected)
+      }
+      
+      temp_res <- patients_admit %>%
+        group_by(gender) %>%
+        summarise(ED = sum(ED),
+                  n.pats = n_distinct(patid)) %>%
+        mutate(condition = cond, 
+               pln = plnx, 
+               ED.p = EDp$p.value)
+      
+      gender_diffs <- gender_diffs %>%
+        rbind(assess_gender_prognosis(patients_admit) %>%
+                mutate(condition = cond, 
+                       pln = plnx))
+    } else {
+      temp_res <- patients_admit %>%
+        group_by(gender) %>%
+        summarise(ED = sum(ED), 
+                  n.pats = n_distinct(patid)) %>%
+        mutate(condition = cond, 
+               pln = plnx, 
+               ED.p = NA)
+    }
+    
+    res <- res %>%
+      rbind(temp_res)
+    
+    timeres <- timeres %>%
+        rbind(tidy_res(patients_admit, diagyear, cond, plnx))
+      
+    ageres <- ageres %>%
+      rbind(tidy_res(patients_admit %>% 
+              mutate(age_group = case_match(diagage, 
+                                            seq(0, 15) ~ "< 16", 
+                                            seq(16, 20) ~ "16-20", 
+                                            seq(21, 25) ~ "21-25", 
+                                            seq(26, 30) ~ "26-30", 
+                                            seq(31, 35) ~ "31-35", 
+                                            seq(36, 40) ~ "36-40",
+                                            seq(41, 45) ~ "41-45", 
+                                            seq(46, 50) ~ "46-50",
+                                            seq(51, 55) ~ "51-55", 
+                                            seq(56, 60) ~ "56-60", 
+                                            seq(61, 65) ~ "61-65", 
+                                            seq(66, 70) ~ "66-70", 
+                                            seq(71, 75) ~ "71-75", 
+                                            seq(76, 80) ~ "76-80",
+                                            seq(81, 90) ~ "81-90", 
+                                            .default = "> 90")),
+                     age_group, cond, plnx))
+      
+    imdres <- imdres %>%
+      rbind(tidy_res(patients_admit, imd, cond, plnx))
+                                  
+    for (gen in c('Men', 'Women')) {
+      if (cond %in% c('ovarian_cancer', 'PCOS') & (gen == "Men")) next
+      
+      # patient characteristics
+      cat("### ", gen, "\n")
+      t <- patients_admit %>%
+        filter(gender == gen) %>%
+        mutate(imd5 = case_when(imd %in% seq(1, 4) ~ '1 - Least deprived',
+                                imd %in% seq(5, 8) ~ '2',
+                                imd %in% seq(9, 12) ~ '3',
+                                imd %in% seq(13, 16) ~ '4',
+                                imd %in% seq(17, 20) ~ '5 - Most deprived',
+                               T ~ as.character(imd))) %>%
+        select(-c(patid, imd, total_tih, n_admissions, death, gender)) %>%
+        rename(`Diagnosis source` = datasource,
+               `Year of diagnosis` = diagyear,
+               `Age at diagnosis` = diagage,
+               `IMD quintile` = imd5,
+               `Launders score` = launders_score) %>%
+        summarizor(by = "ED",
+                   num_stats = c("mean_sd", "median_iqr")) %>%
+      as_flextable(spread_first_col = T) %>%
+      style(i = ~!is.na(variable),
+            pr_t = fp_text_default(bold = T),
+            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
+      autofit(add_w = .01) %>%
+      font(part = "all", fontname = "Calibri") %>%
+      fontsize(part = "all", size = 11)
+
+      cat("\n")
+      cat(knitr::knit_print(t))
+      
+      # prognosis
+      prognosis <- prognosis %>%
+        rbind(assess_prognosis(patients_admit %>%
+                                 filter(gender == gen), 
+                               plnx, cond) %>%
+                mutate(gender = gen, 
+                       condition = cond, 
+                       pln = plnx))
+    }
+  }
+}
+
+# clean up tables
+res <- res %>%
+  rowwise() %>%
+  mutate(prop = 100*prop.test(ED, n.pats)$estimate,
+         low.ci = 100*prop.test(ED, n.pats)$conf.int[1],
+         up.ci = 100*prop.test(ED, n.pats)$conf.int[2]) %>%
+  mutate(s = glue("{signif(prop, 3)}% ({signif(low.ci, 3)}%, {signif(up.ci, 3)}%)    {ED.p}")) %>%
+  mutate(condition = case_match(condition, 
+                                "AS" ~ "Axial spondyloarthritis", 
+                                "brain_tumours" ~ "Brain tumours", 
+                                "CHD" ~ "CHD", 
+                                "COPD" ~ "COPD", 
+                                "IBD" ~ "IBD", 
+                                "MS" ~ "Multiple sclerosis", 
+                                "PCOS" ~ "PCOS", 
+                                "RA" ~ "Rheumatoid arthritis", 
+                                "SBE" ~ "SBE", 
+                                "TB" ~ "Tuberculosis", 
+                                "celiac" ~ "Coeliac disease", 
+                                "colon_cancer" ~ "Colon cancer", 
+                                "lung_cancer" ~ "Lung cancer", 
+                                "lyme" ~ "Lyme disease", 
+                                "ovarian_cancer" ~ "Ovarian cancer", 
+                                "pancreatic_cancer" ~ "Pancreatic cancer", 
+                                "parkinsons" ~ "Parkinson's disease", 
+                                "schizophrenia" ~ "Schizophrenia"))
+
+timeres <- timeres %>%
+  mutate(grp = case_match(condition, 
+                          c("AS", "brain_tumours", "celiac", "CHD", "colon_cancer", "COPD", "IBD", "lung_cancer", "lyme") ~ "1", 
+                          .default = "2"),
+         condition = case_match(condition, 
+                                "AS" ~ "Axial spondyloarthritis", 
+                                "brain_tumours" ~ "Brain tumours", 
+                                "CHD" ~ "CHD", 
+                                "COPD" ~ "COPD", 
+                                "IBD" ~ "IBD", 
+                                "MS" ~ "Multiple sclerosis", 
+                                "PCOS" ~ "PCOS", 
+                                "RA" ~ "Rheumatoid arthritis", 
+                                "SBE" ~ "SBE", 
+                                "TB" ~ "Tuberculosis", 
+                                "celiac" ~ "Coeliac disease", 
+                                "colon_cancer" ~ "Colon cancer", 
+                                "lung_cancer" ~ "Lung cancer", 
+                                "lyme" ~ "Lyme disease", 
+                                "ovarian_cancer" ~ "Ovarian cancer", 
+                                "pancreatic_cancer" ~ "Pancreatic cancer", 
+                                "parkinsons" ~ "Parkinson's disease", 
+                                "schizophrenia" ~ "Schizophrenia"))
+
+ageres <- ageres %>%
+  mutate(age_group = factor(age_group, levels = c("< 16", "16-20", "21-25", "26-30", "31-35", "36-40", "41-45", "46-50", "51-55", "56-60", "61-65", "66-70", "71-75", "76-80", "81-90", "> 90"), ordered = T)) %>%
+  mutate(age_mid = case_match(age_group, 
+                              "< 16" ~ 8, 
+                              "16-20" ~ 18, 
+                              "21-25" ~ 23, 
+                              "26-30" ~ 28, 
+                              "31-35" ~ 33, 
+                              "36-40" ~ 38, 
+                              "41-45" ~ 43, 
+                              "46-50" ~ 48, 
+                              "51-55" ~ 53, 
+                              "56-60" ~ 58, 
+                              "61-65" ~ 63, 
+                              "66-70" ~ 68, 
+                              "71-75" ~ 73, 
+                              "76-80" ~ 78, 
+                              "81-90" ~ 85, 
+                              "> 90" ~ 95),
+         grp = case_match(condition,
+                          c("AS", "brain_tumours", "celiac", "CHD", "colon_cancer", "COPD", "IBD", "lung_cancer", "lyme") ~ "1", 
+                          .default = "2"),
+         condition = case_match(condition,
+                                "AS" ~ "Axial spondyloarthritis", 
+                                "brain_tumours" ~ "Brain tumours", 
+                                "CHD" ~ "CHD", 
+                                "COPD" ~ "COPD", 
+                                "IBD" ~ "IBD", 
+                                "MS" ~ "Multiple sclerosis", 
+                                "PCOS" ~ "PCOS", 
+                                "RA" ~ "Rheumatoid arthritis", 
+                                "SBE" ~ "SBE", 
+                                "TB" ~ "Tuberculosis", 
+                                "celiac" ~ "Coeliac disease", 
+                                "colon_cancer" ~ "Colon cancer", 
+                                "lung_cancer" ~ "Lung cancer", 
+                                "lyme" ~ "Lyme disease", 
+                                "ovarian_cancer" ~ "Ovarian cancer", 
+                                "pancreatic_cancer" ~ "Pancreatic cancer", 
+                                "parkinsons" ~ "Parkinson's disease", 
+                                "schizophrenia" ~ "Schizophrenia"))
+
+imdres <- imdres %>%
+  mutate(grp = case_match(condition, 
+                          c("AS", "brain_tumours", "celiac", "CHD", "colon_cancer", "COPD", "IBD", "lung_cancer", "lyme") ~ "1", 
+                          .default = "2"),
+         condition = case_match(condition, 
+                                "AS" ~ "Axial spondyloarthritis", 
+                                "brain_tumours" ~ "Brain tumours", 
+                                "CHD" ~ "CHD", 
+                                "COPD" ~ "COPD", 
+                                "IBD" ~ "IBD", 
+                                "MS" ~ "Multiple sclerosis", 
+                                "PCOS" ~ "PCOS", 
+                                "RA" ~ "Rheumatoid arthritis", 
+                                "SBE" ~ "SBE", 
+                                "TB" ~ "Tuberculosis", 
+                                "celiac" ~ "Coeliac disease", 
+                                "colon_cancer" ~ "Colon cancer", 
+                                "lung_cancer" ~ "Lung cancer", 
+                                "lyme" ~ "Lyme disease", 
+                                "ovarian_cancer" ~ "Ovarian cancer", 
+                                "pancreatic_cancer" ~ "Pancreatic cancer", 
+                                "parkinsons" ~ "Parkinson's disease", 
+                                "schizophrenia" ~ "Schizophrenia"))
+
+prognosis <- prognosis %>%
+  left_join(gender_diffs, by = join_by(condition, pln)) %>%
+  mutate(condition = case_match(condition, 
+                                "AS" ~ "Axial spondyloarthritis", 
+                                "brain_tumours" ~ "Brain tumours", 
+                                "CHD" ~ "CHD", 
+                                "COPD" ~ "COPD", 
+                                "IBD" ~ "IBD", 
+                                "MS" ~ "Multiple sclerosis", 
+                                "PCOS" ~ "PCOS", 
+                                "RA" ~ "Rheumatoid arthritis", 
+                                "SBE" ~ "SBE", 
+                                "TB" ~ "Tuberculosis", 
+                                "celiac" ~ "Coeliac disease", 
+                                "colon_cancer" ~ "Colon cancer", 
+                                "lung_cancer" ~ "Lung cancer", 
+                                "lyme" ~ "Lyme disease", 
+                                "ovarian_cancer" ~ "Ovarian cancer", 
+                                "pancreatic_cancer" ~ "Pancreatic cancer", 
+                                "parkinsons" ~ "Parkinson's disease", 
+                                "schizophrenia" ~ "Schizophrenia"))
+
+# save all analysis results as csvs
+if (!offset) {
+write_csv(res, glue('{results_filepath}/res.csv'))
+write_csv(timeres, glue('{results_filepath}/timeres.csv'))
+write_csv(ageres, glue('{results_filepath}/ageres.csv'))
+write_csv(imdres, glue('{results_filepath}/imdres.csv'))
+}
+write_csv(prognosis, glue('{results_filepath}/prognosis.csv'))
+
+cat(glue('\nAll results saved at {results_filepath}'))
+cat('\nPlease update analysis_dt in A0_global_vars_R.R accordingly  \n')
+```
+
+
+```{r session_info, echo=FALSE, message = FALSE, results = "asis"}
+cat('# Session information\n')
+print(sessionInfo())
+```

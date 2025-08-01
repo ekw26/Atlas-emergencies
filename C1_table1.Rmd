@@ -1,0 +1,91 @@
+---
+title: "Emergency diagnoses - table 1"
+author: "Emma Whitfield"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(flextable)
+library(lubridate)
+library(RMySQL)
+library(glue)
+source('A0_global_vars_R.R')
+```
+
+```{r display, echo=FALSE, fig.align = "center", warning = FALSE, message = FALSE, results = "asis", fig.width = 16, fig.height = 12}
+db <- dbConnect(
+    MySQL(), 
+    host = host, 
+    user = user, 
+    password = password,
+    dbname = dbname, 
+    port = port
+  )
+
+# extract patients
+pat_query <- dbSendQuery(conn = db, 
+                         statement = glue('select a.patid, a.imd, a.gender, a.yob, a.cond, c.Description as region, "Aurum" as pln from {sql_schema}.all_aurum_patients a left join {data_schema}.aurum_cprd_practice b on a.pracid = b.pracid left join {lookup_schema}.aurum_region c on b.region = c.regionid;'))
+patients <- fetch(pat_query, n = -1)
+dbClearResult(pat_query)
+
+pat_query <- dbSendQuery(conn = db, 
+                         statement = glue('select a.patid, a.imd, a.gender, a.yob, a.cond, c.Description as region, "GOLD" as pln from {sql_schema}.all_gold_patients a left join {data_schema}.gold_cprd_practice b on a.pracid = b.pracid left join {lookup_schema}.gold_prg c on b.region = c.region;'))
+patients <- patients %>% 
+  rbind(fetch(pat_query, n = -1))
+dbClearResult(pat_query)
+
+dbDisconnect(db)
+rm(pat_query)
+
+patients <- patients %>%
+    mutate(imd = as.numeric(imd),
+           gender = case_when(gender == 1 ~ 'Men',
+                              gender == 2 ~ 'Women',
+                              gender == 3 ~ 'Indeterminate',
+                              gender == 4 ~ 'Unknown',
+                              gender == 0 ~ 'Data not entered',
+                              T ~ as.character(gender)), 
+           age_2019 = 2019 - yob, 
+           region = ifelse(region == 'Yorkshire and The Humber', 'Yorkshire & The Humber', region),  
+           imd5 = case_when(imd %in% seq(1, 4) ~ '1 - Least deprived',
+                                imd %in% seq(5, 8) ~ '2', 
+                                imd %in% seq(9, 12) ~ '3', 
+                                imd %in% seq(13, 16) ~ '4', 
+                                imd %in% seq(17, 20) ~ '5 - Most deprived', 
+                               T ~ as.character(imd)))
+
+# produce summary statistics
+t1 <- patients %>%
+  group_by(patid, pln, gender, age_2019, region, imd5) %>%
+  summarise(n.cond = n_distinct(cond)) %>%
+  ungroup() %>%
+  select(-patid) %>%
+  summarizor(by = "pln") %>%
+      as_flextable(spread_first_col = T) %>%
+      style(i = ~!is.na(variable), 
+            pr_t = fp_text_default(bold = T), 
+            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
+      autofit(add_w = .01) %>%
+      font(part = "all", fontname = "Calibri") %>%
+      fontsize(part = "all", size = 11)
+
+t2 <- patients %>%
+  select(pln, cond) %>%
+  summarizor(by = "pln") %>%
+      as_flextable(spread_first_col = T) %>%
+      style(i = ~!is.na(variable), 
+            pr_t = fp_text_default(bold = T), 
+            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
+      autofit(add_w = .01) %>%
+      font(part = "all", fontname = "Calibri") %>%
+      fontsize(part = "all", size = 11)
+
+cat(knitr::knit_print(t1))
+cat("\n\n\\newpage\n")
+cat(knitr::knit_print(t2))
+```
