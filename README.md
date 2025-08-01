@@ -1,3 +1,4 @@
+Code for analyses examining the frequency and prognostic implications of emergency diagnoses in 18 conditions
 These scripts are dependent on sql schemas containing tables of eligible patients, patient characteristics (such as year of birth, gender, IMD, and comorbidities, date of death), and HES APC and A&E records.
 
 To use these files first populate relevant variables in the A0 scripts indicating the working directory, the sql schema in which patient tables are stored and new tables should be created, and the schemas in which dependent data are stored. In particular the 'sql_schema' should contain for every population (pln) and condition to be considered:
