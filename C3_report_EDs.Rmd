@@ -91,7 +91,9 @@ if (!offset) {
     mutate(x = case_match(gender, 
                           "Men" ~ 2, 
                           "Women" ~ 1), 
-           signif = ED.p < 0.05, 
+           signif = case_when(is.na(ED.p) ~ 'Sex-specific condition', 
+                              ED.p < 0.05 ~ "True", 
+                              T ~ "False"), 
            plncap = case_match(pln, 
                                'gold' ~ 'GOLD', 
                                'aurum' ~ 'Aurum'), 
@@ -125,6 +127,7 @@ if (!offset) {
                                pln == "gold" & gender == "Men" & condition == "Multiple sclerosis" ~ 24,
                                pln == "gold" & gender == "Men" & condition == "Rheumatoid arthritis" ~ 26,
                                T ~ prop)) %>%
+      mutate(signif = factor(signif, levels = c("True", "False", "Sex-specific condition"))) %>%
     ggplot(aes(x, prop, group = condition, col = signif)) +
     facet_wrap(plncap ~ .) +
     geom_segment(x = 1, xend = 1, y = 0, yend = 100, col = "grey70", linewidth = 0.5) +
@@ -138,6 +141,7 @@ if (!offset) {
     ylim(c(0, 105)) + 
     xlim(c(-0.3, 2.5)) +
     theme_classic() + 
+      scale_colour_manual(values = c("#56B4E9", "#E69F00", "#009E73")) + 
     theme(axis.line = element_blank(), axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), strip.background = element_blank(), 
           text = element_text(size = 14)) + 
     labs(title = glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn})"),
