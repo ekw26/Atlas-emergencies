@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/1030341344.svg)](https://doi.org/10.5281/zenodo.16840511)
 # Description
 Code for analyses examining the frequency and prognostic implications of emergency diagnoses in 18 conditions
 These scripts are dependent on sql schemas containing tables of eligible patients, patient characteristics (such as year of birth, gender, IMD, and comorbidities, date of death), and HES APC and A&E records.
@@ -58,5 +59,6 @@ loaded via a namespace (and not attached): [1] generics_0.1.3 fontLiberation_0.1
 [46] rstudioapi_0.17.1 knitr_1.49 farver_2.1.2
 [49] htmltools_0.5.8.1 rmarkdown_2.29 compiler_4.4.1
 [52] askpass_1.2.1 openssl_2.3.2
+
 
 
