@@ -1,3 +1,4 @@
+# Description
 Code for analyses examining the frequency and prognostic implications of emergency diagnoses in 18 conditions
 These scripts are dependent on sql schemas containing tables of eligible patients, patient characteristics (such as year of birth, gender, IMD, and comorbidities, date of death), and HES APC and A&E records.
 
@@ -19,4 +20,43 @@ Then to run the analyses run the following scripts in order:
 5. C1_table1.Rmd - produces table 1 summary statistics for each CPRD population
 6. C2_run_analyses.Rmd - defines the presence of an emergency diagnosis, death in the year after diagnosis, and time spent in hospital in the year after diagnosis for each patient. From this carries out analyses of the frequency and prognostic implications of emergency diagnosis.
 7. C3_report_EDs.Rmd - takes the outputs produced from C2_run_analyses.Rmd to produce tables and figures summarising the findings.
+
+# Session information
+Scripts were originally run in Python (version 3.8.5), MySQL 8.0.41, and R (version 4.4.1). 
+Session information and package versions at the time of analysis were as follows:
+
+R version 4.4.1 (2024-06-14 ucrt) Platform: x86_64-w64-mingw32/x64 Running under: Windows Server 2019 x64 (build 17763)
+
+Matrix products: default
+
+locale: [1] LC_COLLATE=English_United Kingdom.1252 [2] LC_CTYPE=English_United Kingdom.1252
+[3] LC_MONETARY=English_United Kingdom.1252 [4] LC_NUMERIC=C
+[5] LC_TIME=English_United Kingdom.1252
+
+time zone: Europe/London tzcode source: internal
+
+attached base packages: [1] stats graphics grDevices utils datasets methods base
+
+other attached packages: [1] ggstance_0.3.7 ggrepel_0.9.6 glue_1.8.0 flextable_0.9.7 [5] lubridate_1.9.4 forcats_1.0.0 stringr_1.5.1 dplyr_1.1.4
+[9] purrr_1.0.4 readr_2.1.5 tidyr_1.3.1 tibble_3.2.1
+[13] ggplot2_3.5.1 tidyverse_2.0.0
+
+loaded via a namespace (and not attached): [1] generics_0.1.3 fontLiberation_0.1.0 xml2_1.3.6
+[4] stringi_1.8.4 hms_1.1.3 digest_0.6.37
+[7] magrittr_2.0.3 evaluate_1.0.3 grid_4.4.1
+[10] timechange_0.3.0 fastmap_1.2.0 plyr_1.8.9
+[13] zip_2.3.2 scales_1.3.0 fontBitstreamVera_0.1.1 [16] textshaping_1.0.0 cli_3.6.4 crayon_1.5.3
+[19] rlang_1.1.5 fontquiver_0.2.1 bit64_4.6.0-1
+[22] munsell_0.5.1 withr_3.0.2 yaml_2.3.10
+[25] gdtools_0.4.1 parallel_4.4.1 tools_4.4.1
+[28] officer_0.6.7 uuid_1.2-1 tzdb_0.4.0
+[31] colorspace_2.1-1 vctrs_0.6.5 R6_2.6.1
+[34] lifecycle_1.0.4 bit_4.5.0.1 vroom_1.6.5
+[37] ragg_1.3.3 pkgconfig_2.0.3 pillar_1.10.1
+[40] gtable_0.3.6 data.table_1.16.4 Rcpp_1.0.14
+[43] systemfonts_1.2.1 xfun_0.51 tidyselect_1.2.1
+[46] rstudioapi_0.17.1 knitr_1.49 farver_2.1.2
+[49] htmltools_0.5.8.1 rmarkdown_2.29 compiler_4.4.1
+[52] askpass_1.2.1 openssl_2.3.2
+
 
