@@ -9,6 +9,7 @@ output: word_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(flextable)
+library(gtsummary)
 library(lubridate)
 library(RMySQL)
 library(glue)
@@ -18,11 +19,33 @@ source('A0_global_vars_R.R')
 
 sensitivity_analysis <- F # to run sensitivity analysis 1 set to TRUE and offset to FALSE
 offset <- F # to run sensitivity analysis 2 set to TRUE and sensitivity_analysis to FALSE
+exclude_covid <- F # to exclude potential covid bias on prognosis set to T
 td <- today()
-results_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{td}/sensitivity_analysis/offset/"), glue("{results_filepath}{td}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{td}/offset/"), glue("{results_filepath}{td}/")))
 
+results_filepath <- glue("{results_filepath}{td}")
 if (!file.exists(results_filepath)) {
   dir.create(file.path(results_filepath))
+}
+
+if (sensitivity_analysis) {
+  results_filepath <- glue("{results_filepath}{td}/sensitivity_analysis")
+  if (!file.exists(results_filepath)) {
+    dir.create(file.path(results_filepath))
+  }
+} 
+
+if (offset) {
+  results_filepath <- glue("{results_filepath}/offset")
+  if (!file.exists(results_filepath)) {
+    dir.create(file.path(results_filepath))
+  }
+}
+
+if (exclude_covid) {
+  results_filepath <- glue("{results_filepath}/exclude_covid")
+  if (!file.exists(results_filepath)) {
+    dir.create(file.path(results_filepath))
+  }
 }
 
 if (sensitivity_analysis) {
@@ -39,6 +62,10 @@ if (sensitivity_analysis) {
 
 if (offset) {
   cat('# Offset death\n')
+}
+
+if (exclude_covid) {
+  cat('# Exclude 2019 diagnoses\n')
 }
 
 # 1. Useful functions ----
@@ -89,6 +116,11 @@ extract_EDs <- function(pln, condition) {
            enddate = ymd(enddate), 
            deathdate = ymd(deathdate)) %>%
     mutate(imd = as.numeric(imd))
+  
+  if (exclude_covid) {
+    patients <- patients %>%
+      filter(diagdate < ymd('2019-01-01'))
+  }
   
   # make sure there are no extra patients
   cases <- unique(patients$patid)
@@ -253,6 +285,7 @@ assess_prognosis <- function(patients_admit, pln, condition) {
               mean.time = mean(total_tih)) %>%
     mutate(prop.death = 100*n.death/n.pats,
            prop.admitted = 100*n.admitted/n.pats)
+           
     
   # fit death models
   m1 <- glm(death.bin ~ ED + diagage + diagyear + imd + launders_score + datasource, 
@@ -290,7 +323,32 @@ assess_prognosis <- function(patients_admit, pln, condition) {
   
   time.crude.int <- exp(confint(m4, "EDTRUE"))
 
-  return(tibble(n.ED = obs$n.pats[obs$ED], n.EDdeath = obs$n.death[obs$ED], death.obs_true = obs$prop.death[obs$ED], n.NED = obs$n.pats[!obs$ED], n.NEDdeath = obs$n.death[!obs$ED], death.obs_false = obs$prop.death[!obs$ED], death.crude = exp(coef(m2)[2]), death.lowcrude = death.crude.int[1], death.upcrude = death.crude.int[2], death = exp(coef(m1)[2]), death.low = death.int[1], death.up = death.int[2], n.EDadmitted = obs$n.admitted[obs$ED], perc.EDadmitted = obs$prop.admitted[obs$ED], time.obs_true = obs$mean.time[obs$ED], n.NEDadmitted = obs$n.admitted[!obs$ED], perc.NEDadmitted = obs$prop.admitted[!obs$ED], time.obs_false = obs$mean.time[!obs$ED], time.crude = time.crude.int[3], time.lowcrude = time.crude.int[1], time.upcrude = time.crude.int[2], time = time.int[3], time.low = time.int[1], time.up = time.int[2]))
+  main_prog <- tibble(n.ED = obs$n.pats[obs$ED], 
+  n.EDdeath = obs$n.death[obs$ED], 
+  death.obs_true = obs$prop.death[obs$ED], 
+  n.NED = obs$n.pats[!obs$ED], 
+  n.NEDdeath = obs$n.death[!obs$ED], 
+  death.obs_false = obs$prop.death[!obs$ED], 
+  death.crude = exp(coef(m2)[2]), 
+  death.lowcrude = death.crude.int[1], 
+  death.upcrude = death.crude.int[2], 
+  death = exp(coef(m1)[2]), 
+  death.low = death.int[1], 
+  death.up = death.int[2], 
+  n.EDadmitted = obs$n.admitted[obs$ED], 
+  perc.EDadmitted = obs$prop.admitted[obs$ED], 
+  time.obs_true = obs$mean.time[obs$ED], 
+  n.NEDadmitted = obs$n.admitted[!obs$ED], 
+  perc.NEDadmitted = obs$prop.admitted[!obs$ED], 
+  time.obs_false = obs$mean.time[!obs$ED], 
+  time.crude = time.crude.int[3], 
+  time.lowcrude = time.crude.int[1], 
+  time.upcrude = time.crude.int[2], 
+  time = time.int[3], 
+  time.low = time.int[1], 
+  time.up = time.int[2])
+  
+  return(main_prog)
 }
 
 assess_gender_prognosis <- function(patients_admit) {
@@ -350,7 +408,7 @@ res <- tibble(gender = c(), pln = c(), condition = c(), ED = c(), n.pats = c(), 
 timeres <- tibble(gender = c(), pln = c(), condition = c(), diagyear = c(), prop = c(), low.ci = c(), up.ci = c())
 ageres <- tibble(gender = c(), pln = c(), condition = c(), diagage = c(), prop = c(), low.ci = c(), up.ci = c())
 imdres <- tibble(gender = c(), pln = c(), condition = c(), imd = c(), prop = c(), low.ci = c(), up.ci = c())
-prognosis <- tibble(gender = c(), pln = c(), condition = c(), time = c(), n.ED = c(), n.EDdeath = c(), death.obs_true = c(), n.NED = c(), n.NEDdeath = c(), death.obs_false = c(), death.crude = c(), death.lowcrude = c(), death.upcrude = c(), death = c(), death.low = c(), death.up = c(), n.EDadmitted = c(), perc.EDadmitted = c(), time.obs_true = c(), n.NEDadmitted = c(), perc.NEDadmitted = c(), time.obs_false = c(), time.crude = c(), time.lowcrude = c(), time.upcrude = c(), time = c(), time.low = c(), time.up = c())
+prognosis <- tibble(gender = c(), pln = c(), condition = c(), n.ED = c(), n.EDdeath = c(), death.obs_true = c(), n.NED = c(), n.NEDdeath = c(), death.obs_false = c(), death.crude = c(), death.lowcrude = c(), death.upcrude = c(), death = c(), death.low = c(), death.up = c(), n.EDadmitted = c(), perc.EDadmitted = c(), time.obs_true = c(), n.NEDadmitted = c(), perc.NEDadmitted = c(), time.obs_false = c(), time.crude = c(), time.lowcrude = c(), time.upcrude = c(), time = c(), time.low = c(), time.up = c())
 gender_diffs <- tibble(pln = c(), condition = c(), death.p = c(), hosp.p = c())
 
 tidy_res <- function(patients_admit, group_var, cond1, pln1) {
@@ -452,31 +510,27 @@ for (cond in conditions) {
                                 imd %in% seq(13, 16) ~ '4',
                                 imd %in% seq(17, 20) ~ '5 - Most deprived',
                                T ~ as.character(imd))) %>%
-        select(-c(patid, imd, total_tih, n_admissions, death, gender)) %>%
-        rename(`Diagnosis source` = datasource,
-               `Year of diagnosis` = diagyear,
-               `Age at diagnosis` = diagage,
-               `IMD quintile` = imd5,
-               `Launders score` = launders_score) %>%
-        summarizor(by = "ED",
-                   num_stats = c("mean_sd", "median_iqr")) %>%
-      as_flextable(spread_first_col = T) %>%
-      style(i = ~!is.na(variable),
-            pr_t = fp_text_default(bold = T),
-            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
-      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
-      autofit(add_w = .01) %>%
-      font(part = "all", fontname = "Calibri") %>%
-      fontsize(part = "all", size = 11)
-
+       select(ED, diagage, launders_score, imd5, datasource) %>%
+       tbl_summary(by = ED,
+                   type = all_continuous() ~ "continuous2",
+                   statistic = list(
+                     all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
+                     all_categorical() ~ "{n} ({p}%)"
+                   ), 
+                   digits = list(all_continuous() ~ 1, 
+                                 all_categorical() ~ 1), 
+                   label = list(diagage = "Age at diagnosis", launders_score = "Comorbidity score", imd5 = "IMD quintile", datasource = "Year of diagnosis")) %>%
+       add_n()
+      
       cat("\n")
       cat(knitr::knit_print(t))
       
       # prognosis
-      prognosis <- prognosis %>%
-        rbind(assess_prognosis(patients_admit %>%
+      tmp_prog <- assess_prognosis(patients_admit %>%
                                  filter(gender == gen), 
-                               plnx, cond) %>%
+                               plnx, cond)
+      prognosis <- prognosis %>%
+        rbind(tmp_prog %>%
                 mutate(gender = gen, 
                        condition = cond, 
                        pln = plnx))

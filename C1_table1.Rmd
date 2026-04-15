@@ -9,6 +9,7 @@ output: word_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(flextable)
+library(gtsummary)
 library(lubridate)
 library(RMySQL)
 library(glue)
@@ -63,27 +64,29 @@ t1 <- patients %>%
   summarise(n.cond = n_distinct(cond)) %>%
   ungroup() %>%
   select(-patid) %>%
-  summarizor(by = "pln") %>%
-      as_flextable(spread_first_col = T) %>%
-      style(i = ~!is.na(variable), 
-            pr_t = fp_text_default(bold = T), 
-            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
-      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
-      autofit(add_w = .01) %>%
-      font(part = "all", fontname = "Calibri") %>%
-      fontsize(part = "all", size = 11)
+  tbl_summary(by = pln,
+              type = list(n.cond ~ "continuous2", 
+                          all_continuous() ~ "continuous2"),
+              statistic = list(
+                all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
+                all_categorical() ~ "{n} ({p}%)"
+              ), 
+              digits = list(all_continuous() ~ 1, 
+                            all_categorical() ~ 1), 
+              label = list(gender = "Gender", age_2019 = "Age in 2019", region = "Region", imd5 = "IMD quintile", n.cond = "Number of conditions")) %>%
+  add_n()
 
 t2 <- patients %>%
   select(pln, cond) %>%
   summarizor(by = "pln") %>%
-      as_flextable(spread_first_col = T) %>%
-      style(i = ~!is.na(variable), 
-            pr_t = fp_text_default(bold = T), 
-            pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
-      prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
-      autofit(add_w = .01) %>%
-      font(part = "all", fontname = "Calibri") %>%
-      fontsize(part = "all", size = 11)
+  as_flextable(spread_first_col = T) %>%
+  style(i = ~!is.na(variable), 
+        pr_t = fp_text_default(bold = T), 
+        pr_p = officer::fp_par(text.align = "left", padding = 5)) %>%
+  prepend_chunks(i = ~is.na(variable), j = 1, as_chunk("\t")) %>%
+  autofit(add_w = .01) %>%
+  font(part = "all", fontname = "Calibri") %>%
+  fontsize(part = "all", size = 11)
 
 cat(knitr::knit_print(t1))
 cat("\n\n\\newpage\n")

@@ -18,9 +18,26 @@ source('A0_global_vars_R.R')
 
 sensitivity_analysis <- F # to run sensitivity analysis 1 set to TRUE and offset to FALSE
 offset <- F # to run sensitivity analysis 2 set to TRUE and sensitivity_analysis to FALSE
+exclude_covid <- F # to exclude potential covid bias on prognosis set to T
 td <- today()
-outputs_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{td}/sensitivity_analysis/offset/"), glue("{results_filepath}{td}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{td}/offset/"), glue("{results_filepath}{td}/")))
-results_filepath <- ifelse(sensitivity_analysis, ifelse(offset, glue("{results_filepath}{analysis_dt}/sensitivity_analysis/offset/"), glue("{results_filepath}{analysis_dt}/sensitivity_analysis/")),  ifelse(offset, glue("{results_filepath}{analysis_dt}/offset/"), glue("{results_filepath}{analysis_dt}/")))
+
+if (sensitivity_analysis) {
+  outputs_filepath <- glue("{results_filepath}{td}/sensitivity_analysis/")
+  results_filepath <- glue("{results_filepath}{analysis_dt}/sensitivity_analysis")
+} else {
+  outputs_filepath <- glue("{results_filepath}{td}/")
+  results_filepath <- glue("{results_filepath}{analysis_dt}")
+}
+
+if (offset) {
+  outputs_filepath <- glue("{outputs_filepath}/offset/")
+  results_filepath <- glue("{results_filepath}/offset")
+}
+
+if (exclude_covid) {
+  outputs_filepath <- glue("{outputs_filepath}/exclude_covid/")
+  results_filepath <- glue("{results_filepath}/exclude_covid")
+}
 
 if (!file.exists(outputs_filepath)) {
   dir.create(file.path(outputs_filepath))
@@ -42,6 +59,9 @@ if (offset) {
   cat('# Offset death  \n')
 }
 
+if (exclude_covid) {
+  cat('# Exclude 2019 diagnoses\n')
+}
 # 1. Get results ----
 # produced in C2_run_analyses.Rmd
 if (!offset) {
@@ -192,7 +212,6 @@ if (!offset) {
     if (trend_var == "diagyear") {
       df <- df %>%
         mutate(label = if_else(diagyear == 2019, as.character(condition), NA_character_))
-      # title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by year of diagnosis")
       x.label <- "Year of diagnosis"
       
       nudge_x <- 5
@@ -205,7 +224,6 @@ if (!offset) {
         mutate(label = if_else(age_mid == max(age_mid), as.character(condition), NA_character_)) %>%
         ungroup() 
       
-      # title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by age group at diagnosis")
       x.label <- "Age at diagnosis"
       
       if (pln1 == "gold" & gender1 == "Men") {
@@ -219,7 +237,6 @@ if (!offset) {
     } else { # deprivation
       df <- df %>%
         mutate(label = if_else(imd == 20, as.character(condition), NA_character_))
-      # title <- glue("Percentage of cases diagnosed following an emergency presentation ({ED_defn}) by IMD twentile")
       x.label <- "IMD twentile"
       
       nudge_x <- 5
@@ -227,12 +244,6 @@ if (!offset) {
       x.breaks <- seq(1, 20)
       x.labels <- seq(1, 20)
     }
-    
-    # if (gender1 == "Men") {
-    #   subtitle <- glue('{ifelse(pln1 == "aurum", "Aurum", "GOLD")}: Men')
-    # } else {
-    #   subtitle <- glue('{ifelse(pln1 == "aurum", "Aurum", "GOLD")}: Women')
-    # }
     
     p <- df %>%
       ggplot(aes(.data[[trend_var]], prop, group = condition, col = condition)) + 
@@ -447,6 +458,8 @@ cat(knitr::knit_print(t3a))
 cat('GOLD - prognosis')
 cat(knitr::knit_print(t3b))
 
+cat("  \n  \n\\newpage\n")
+
 cat('# Prognosis - hospitalisation')
 cat('\n')
 
@@ -593,7 +606,6 @@ if (!(offset | sensitivity_analysis)) {
       theme_bw() + scale_colour_manual(values = atlas_palette, guide = "none") +
       scale_size_continuous(range = c(0.25, 3), limits = c(5, 55)) + 
       scale_y_continuous(limits = ylims) +
-      # geom_label_repel(aes(label = condition), na.rm = T, segment.linetype = 2, size = 1.75, fontface = "bold") +
       geom_text_repel(aes(label = condition), na.rm = T, segment.linetype = 2, size = 1.75, fontface = "bold") +
       theme(text = element_text(size = 7, face = "bold")) + 
       labs(x = "One-year mortality (%) in non-emergency-diagnosed patients", 
@@ -621,7 +633,6 @@ if (!(offset | sensitivity_analysis)) {
       scale_size_continuous(range = c(0.25, 3), limits = c(5, 55)) + 
       scale_x_continuous(limits = xlims, breaks = xbreaks) +
       ylim(0, NA) +
-      # geom_label_repel(aes(label = condition), na.rm = T, segment.linetype = 2, size = 1.75, fontface = "bold") +
       geom_text_repel(aes(label = condition), na.rm = T, segment.linetype = 2, size = 1.75, fontface = "bold") +
       theme(text = element_text(size = 7, face = "bold")) +
       labs(x = "Mean nights in hospital in non-emergency-diagnosed patients", 

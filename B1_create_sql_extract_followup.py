@@ -1,4 +1,4 @@
-# Generate sql script to extract patient followupfor each condition
+# Generate sql script to extract patient followup for each condition
 # Requires tables containing patients for inclusion and hospitalisations and ae attendances data
 
 from A0_global_vars_py import *
